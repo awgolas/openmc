@@ -12,6 +12,11 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as sla
 
+import pycuda.driver as cuda
+import pycuda.autoinit
+from pycuda.compiler import SourceModule
+from pycuda.sparse.packeted import PacketedSpMV
+
 from openmc.checkvalue import check_type, check_length
 from .abc import DepSystemSolver
 
@@ -154,6 +159,83 @@ class IPFCramSolver(DepSystemSolver):
             y += 2*np.real(alpha*sla.spsolve(A - theta*ident, y))
         return y * self.alpha0
 
+
+class IPFCramGPUSolver(DepSystemSolver):
+    r"""CRAM depletion solver that uses incomplete partial factorization
+
+    Provides a :meth:`__call__` that utilizes an incomplete
+    partial factorization (IPF) for the Chebyshev Rational Approximation
+    Method (CRAM), as described in the following paper: M. Pusa, "`Higher-Order
+    Chebyshev Rational Approximation Method and Application to Burnup Equations
+    <https://doi.org/10.13182/NSE15-26>`_," Nucl. Sci. Eng., 182:3, 297-318.
+
+    Parameters
+    ----------
+    alpha : numpy.ndarray
+        Complex residues of poles used in the factorization. Must be a
+        vector with even number of items.
+    theta : numpy.ndarray
+        Complex poles. Must have an equal size as ``alpha``.
+    alpha0 : float
+        Limit of the approximation at infinity
+
+    Attributes
+    ----------
+    alpha : numpy.ndarray
+        Complex residues of poles :attr:`theta` in the incomplete partial
+        factorization. Denoted as :math:`\tilde{\alpha}`
+    theta : numpy.ndarray
+        Complex poles :math:`\theta` of the rational approximation
+    alpha0 : float
+        Limit of the approximation at infinity
+
+    """
+
+    def __init__(self, alpha, theta, alpha0):
+        check_type("alpha", alpha, np.ndarray, numbers.Complex)
+        check_type("theta", theta, np.ndarray, numbers.Complex)
+        check_length("theta", theta, alpha.size)
+        check_type("alpha0", alpha0, numbers.Real)
+        self.alpha = alpha
+        self.theta = theta
+        self.alpha0 = alpha0
+
+    def __call__(self, A, n0, dt):
+        """Solve depletion equations using IPF CRAM
+
+        Parameters
+        ----------
+        A : scipy.sparse.csr_matrix
+            Sparse transmutation matrix ``A[j, i]`` desribing rates at
+            which isotope ``i`` transmutes to isotope ``j``
+        n0 : numpy.ndarray
+            Initial compositions, typically given in number of atoms in some
+            material or an atom density
+        dt : float
+            Time [s] of the specific interval to be solved
+
+        Returns
+        -------
+        numpy.ndarray
+            Final compositions after ``dt``
+
+        """
+        A = sp.csr_matrix(A * dt, dtype=np.float32)
+        spmv = PacketedSpMV(A, False, A.dtype)
+        
+        y = np.asarray(n0).astype(spmv.dtype)
+        y_gpu
+        
+        A_gpu = cuda.mem_alloc(A.nbytes)
+        y_gpu = cuda.mem_alloc(y.nbytes)
+        cuda.memcpy_htod(A_gpu, A)
+        cuda.memcpy_htod(y_gpu, y)
+        
+        y = np.asarray(n0, dtype=np.float64)
+        ident = sp.eye(A.shape[0])
+        for alpha, theta in zip(self.alpha, self.theta):
+            y += 2*np.real(alpha*sla.spsolve(A - theta*ident, y))
+        return y * self.alpha0
 
 # Coefficients for IPF Cram 16
 c16_alpha = np.array([
